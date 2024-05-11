@@ -3,8 +3,8 @@ import tensorflow as tf
 import numpy as np
 import time
 
-logs_dir = "results/logs"
-checkpoints_dir = "results/checkpoints"
+logs_dir = "results//logs"
+checkpoints_dir = "results//checkpoints"
 
 REGULARIZER = tf.keras.regularizers.l2(l=0.0001)
 INITIALIZER = tf.keras.initializers.VarianceScaling(scale=2.,

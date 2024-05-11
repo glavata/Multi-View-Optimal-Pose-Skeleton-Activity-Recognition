@@ -37,7 +37,7 @@ MAX_LEN_KEY_POSES = 15
 MAX_LEN_SEQUENCE = 500
 
 #TODO: dynamic folder
-DATASET_DIR = 'C://Users//glava//Documents//projects//datasets//'
+DATASET_DIR = 'datasets//'
 
 SKELETON_REF_NTU = np.array([-5.08644832e-04,  4.10482094e-02,  3.35510274e-02, -5.87525592e-02,
 						  8.27482678e-01, -1.41923286e-01, -1.11551306e-01,  1.59272302e+00,
