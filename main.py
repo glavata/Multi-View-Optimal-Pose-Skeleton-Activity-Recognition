@@ -1,12 +1,16 @@
 import numpy as np
 from pathlib import Path
-import pickle
 import tables
 from method.hmm import train_hmm
-from method.visualizer import draw_dataset_generic
-from generator.seq_gen import SkeletonSeqGenerator, Dataset, NormType, RepType, RotType
-from generator.dataset_gen import local_gen_pku, local_gen_ntu
-from utils.compiler import compile_kalman
+from method.st_gcn import train_gcn
+from method.hcn_train import train_hcn
+from method.visualizer import draw_dataset_generic, draw_dataset_generator, draw_dataset_hidden_states
+from method.validator import find_params_generator, dtw_validation, skel_transf_regressor
+from generator.seq_gen import SkeletonSeqGenerator, RepType
+from generator.dataset_gen import local_gen_pku, local_gen_ntu, local_gen_ntu_simple
+#from utils.compiler import compile_kalman
+from utils.multi_view_util import FuseType, Dataset, NormType, RotType
+
 
 np.seterr(all='raise')
 
@@ -21,10 +25,10 @@ def get_params(params_d):
     norm_type_param = NormType.NORM_SKEL_REF
     rep_type_param = RepType.SEQUENCE
     rot_type_param = RotType.ROT_SEQ
-    mv_merge_param = False
+    mv_fuse_param = FuseType.NONE
 
-    if 'mv_merged' in params_d.keys():
-        mv_merge_param = params_d['mv_merged']
+    if 'mv_fuse_type' in params_d.keys():
+        mv_fuse_param = params_d['mv_fuse_type']
     if 'norm_type' in params_d.keys():
         norm_type_param = params_d['norm_type']
     if 'rep_type' in params_d.keys():
@@ -32,16 +36,16 @@ def get_params(params_d):
     if 'rot_type' in params_d.keys():
         rot_type_param = params_d['rot_type']
 
-    return mv_merge_param, norm_type_param, rep_type_param, rot_type_param
+    return mv_fuse_param, norm_type_param, rep_type_param, rot_type_param
 
-def check_file_exist(type_d, mv_merge_param, norm_type_param, rep_type_param, rot_type_param, data_preprocess, classes=None):
-    param_d_str =  "{0}-{1}-{2}-{3}".format(int(mv_merge_param), norm_type_param.value, rep_type_param.value, rot_type_param.value)
+def check_file_exist(type_d, type_params, data_preprocess, classes=None):
+    param_d_str =  "{0}-{1}-{2}-{3}".format(*type_params)
     
     file_name = 'processed_data//' + type_d 
     if(classes is None):
-        file_name = file_name + '_param_' + param_d_str + ".h5"
+        file_name = f"{file_name}_param_{param_d_str}.h5"
     else:
-        file_name = file_name + "_cls_" + classes[:3] + '_param_' + param_d_str + ".h5"
+        file_name = f"{file_name}_cls_{classes[:3]}_param_{param_d_str}.h5"
     
     if(data_preprocess == False):
         my_file = Path(file_name)
@@ -58,17 +62,16 @@ def check_file_exist(type_d, mv_merge_param, norm_type_param, rep_type_param, ro
 
     return False, file_name
 
-def get_dataset_pku(type_d='pku_cv_train', data_preprocess = False, params_d = {}):
-    mv_merge_param, norm_type_param, rep_type_param, rot_type_param = get_params(params_d)
+def get_dataset_pku(type_d='pku_cv_train', data_preprocess = False, return_gen=False, params_d = {}):
+    mv_fuse_param, norm_type_param, rep_type_param, rot_type_param = get_params(params_d)
     classes = params_d['classes']
     #subsample = params_d['subsample']
-    plot_mv = params_d['plot_mv']
     kalman_params = params_d['kalman_f']
-
+    
     #subtype = params_d["subtype"] #full video sequences or separated action sequences only?
     #type_d = type_d + "_" + subtype
-
-    res = check_file_exist(type_d, mv_merge_param, norm_type_param, rep_type_param, rot_type_param, data_preprocess)
+    type_params = [mv_fuse_param.value, norm_type_param.value, rep_type_param.value, rot_type_param.value]
+    res = check_file_exist(type_d, type_params, data_preprocess)
     if(res[0]):
         return res[1], res[2], Path(res[2].filename).name
     file_name = res[1]
@@ -88,64 +91,40 @@ def get_dataset_pku(type_d='pku_cv_train', data_preprocess = False, params_d = {
     batch_size = 3
     train_generator = SkeletonSeqGenerator(dataset_conf, batch_size, shuffle=False)
 
-    return prepare_dataset_gen(dataset_conf['type'], train_generator, file_name, kalman_params, mv_merge_param, plot_mv, coords=75)
+    return prepare_dataset_gen(dataset_conf['type'], train_generator, file_name, return_gen, params_d, coords=75)
 
-
-def get_dataset_utd(type_d='utd_utd_train', data_preprocess = False, params_d = {}):
-    
-    _, norm_type_param, rep_type_param, rot_type_param = get_params(params_d)
-    res = check_file_exist(type_d, norm_type_param, rep_type_param, rot_type_param, data_preprocess)
-    if(res[0]):
-        return res[1]
-    file_name = res[1]
-
-    if(type_d=="utd_utd_train"):
-        tgt_subj = [1, 3, 5, 7]
-    elif(type_d=="utd_utd_test"):
-        tgt_subj = [2, 4, 6, 8]
-    else:
-        raise "Error"
-
-    print("Preparing UTD-MHAD data / type {0}... \n".format(type_d))
-
-    dataset = {'type': Dataset.UTD_MHAD,
-                'norm_type' : norm_type_param,
-                'rep_type' : rep_type_param,
-                'rot_type' : rot_type_param,
-                'param' : { 'subject': tgt_subj },
-                'max_clust' : None}
-
-    batch_size = 128
-    train_generator = SkeletonSeqGenerator(dataset, batch_size, shuffle=False)
-
-    return prepare_dataset_gen(train_generator, file_name, coords=60)
-
-def get_dataset_ntu(type_d='ntu_cs_train', data_preprocess = False, params_d = {}):
+def get_dataset_ntu(type_d='ntu_cs_train', data_preprocess = False, return_gen=False, params_d = {}):
 
     classes = params_d['classes']
     kalman_params = params_d['kalman_f']
-    plot_mv = params_d['plot_mv']
-    mv_merge_param, norm_type_param, rep_type_param, rot_type_param = get_params(params_d)
-    res = check_file_exist(type_d, mv_merge_param, norm_type_param, rep_type_param, rot_type_param, data_preprocess, classes)
+
+    mv_fuse_param, norm_type_param, rep_type_param, rot_type_param = get_params(params_d)
+    type_params = [mv_fuse_param.value, norm_type_param.value, rep_type_param.value, rot_type_param.value]
+
+    res = check_file_exist(type_d, type_params, data_preprocess, classes)
     
     if(res[0]):
-        return res[1], res[2], Path(res[2].filename).name
+        return res[1], res[2], res[2].filename
     file_name = res[1]
 
     tgt_subj, tgt_cls, tgt_cam = None, None, None
 
-    if(type_d=="cs_train"):
+    #TODO: Move to seq_gen?
+    if(type_d=="ntu_cs_train"):
         tgt_subj = NTU_SUBJ_TRAIN
         tgt_cam = NTU_CAMERA_TRAIN + NTU_CAMERA_TEST
-    elif(type_d=="cs_test"):
+    elif(type_d=="ntu_cs_test"):
         tgt_subj = NTU_SUBJ_TEST
         tgt_cam = NTU_CAMERA_TRAIN + NTU_CAMERA_TEST
-    elif(type_d == "cv_train"):
+    elif(type_d == "ntu_cv_train"):
         tgt_subj = NTU_SUBJ_TRAIN + NTU_SUBJ_TEST
         tgt_cam = NTU_CAMERA_TRAIN
-    elif (type_d == "cv_test"):
+    elif (type_d == "ntu_cv_test"):
         tgt_subj = NTU_SUBJ_TRAIN + NTU_SUBJ_TEST
         tgt_cam = NTU_CAMERA_TEST
+    elif(type_d == "ntu_all_test" or type_d == "ntu_all_train"):
+        tgt_subj = NTU_SUBJ_TRAIN + NTU_SUBJ_TEST
+        tgt_cam = NTU_CAMERA_TRAIN + NTU_CAMERA_TEST
     else:
         raise "Error"
 
@@ -172,212 +151,41 @@ def get_dataset_ntu(type_d='ntu_cs_train', data_preprocess = False, params_d = {
     batch_size = 128
     train_generator = SkeletonSeqGenerator(dataset_conf, batch_size, shuffle=False)
 
-    return prepare_dataset_gen(dataset_conf['type'], train_generator, file_name, kalman_params, mv_merge_param, plot_mv, coords=75)
+    return prepare_dataset_gen(dataset_conf['type'], train_generator, file_name, return_gen, params_d, coords=75)
 
-#@jit
-def prepare_dataset_gen_old(train_generator, file_name, coords=75):
-    
-    cur_max_len = 15
-    cur_max_len_ind = 10
-    
-    X_act = np.zeros((5000,cur_max_len,coords))
-    seq_lens_sampl = np.empty((0), dtype=np.int32)
-    y_act = np.empty((0), dtype=np.int32)
-    ind_splits_total = np.empty((0,cur_max_len_ind), dtype=np.int32)
-    sample_counter = 0
-
-    for X, y, seq_len, ind_splits in train_generator:
-        for b in range(X.shape[0]):
-            X_tmp = X[b]
-            y_tmp = y[b]
-
-            if(ind_splits is not None):
-                ind_split = ind_splits[b]
-                if(ind_split.shape[1] > cur_max_len_ind):
-                    new_pad = ind_split.shape[1] - cur_max_len_ind
-                    ind_splits_total = np.pad(ind_splits_total, ((0,0), (0,new_pad)))
-                    cur_max_len_ind = ind_split.shape[1]
-
-                ind_splits_total = np.concatenate([ind_splits_total, ind_split[np.newaxis, :]])
-
-            if(sample_counter == X_act.shape[0]):
-                X_act = np.concatenate([X_act, np.zeros((5000, cur_max_len, coords))])
-
-            #if(X_act.shape[1] != X.shape[1]):
-            #    x_tmp = np.zeros((1, X_act.shape[1], X_act.shape[2]))
-            #    x_tmp[0, :X.shape[1], :] = X[b]
-            #    X_act[sample_counter] = x_tmp
-            #else:
-            if(X_tmp.shape[0] > cur_max_len):
-                new_pad = X_tmp.shape[0] - cur_max_len
-                X_act = np.pad(X_act, ((0,0), (0,new_pad), (0,0)))
-                cur_max_len = X_tmp.shape[0]
-
-            X_act[sample_counter] = X_tmp
-
-            y_act = np.concatenate([y_act, np.expand_dims(y_tmp,axis=0)])
-            seq_lens_sampl = np.concatenate([seq_lens_sampl, np.expand_dims(seq_len[b],axis=0)])
-
-            print("Sample " + str(sample_counter) + "\r")
-            sample_counter+=1
-
-    X_act = X_act[:sample_counter]
-
-    f = open(file_name,"r+")
-    pickle.dump([X_act, y_act, seq_lens_sampl], f, protocol=4)
-    f.close()
-
-    return X_act, y_act, seq_lens_sampl
-
-def prepare_dataset_gen_pku_OLD(train_generator, file_name, coords=75, window_size=15, subsample=True):
-    cur_max_len = 15
-    
-    seq_lens_sampl = np.zeros((5000), dtype=np.int32)
-    X_act = np.zeros((5000,cur_max_len,coords))
-    y_act = np.zeros((5000), dtype=np.int32)
-    seq_lens_act = np.zeros((5000), dtype=np.int32)
-    #y_mview = np.empty((0), dtype=np.int32)
-    sample_counter_seq = 0
-
-    X_window_seg_vec = np.zeros((5000, 75))
-    y_window_seg = np.zeros((5000), dtype=np.int32)
-    y_window_pose = np.zeros((5000), dtype=np.int32)
-    y_sample_num = np.zeros((5000), dtype=np.int32)
-    sample_counter_window = 0
-
-    sample_counter = 0
-
-    for X, _, seq_len, ind_splits in train_generator:
-        for b in range(X.shape[0]):
-            #sample_counter +=1
-            #continue
-            X_tmp = X[b]
-            #y_tmp = y[b]
-            seq_len_tmp = seq_len[b]
-            i_tmp = ind_splits[b]
-            i_tmp = i_tmp[i_tmp != -1]
-
-            #y_mview = np.concatenate([y_mview, np.expand_dims(y_tmp, axis=0)]) #used for indexing multi-view files
-
-            for i in range(len(i_tmp) - 1):
-                st, end = i_tmp[i], i_tmp[i+1]
-
-                if(st == end):
-                    continue
-                
-                seg_class = X_tmp[st, 150]
-                if(seg_class == 0):
-                    continue
-                else:
-                    index_split = np.unique(X_tmp[st:end, 151], return_index=True)[1][1:]
-                    res_new = np.split(X_tmp[st:end, 0:75], index_split, axis=0)
-                    key_poses = np.concatenate([np.median(np.expand_dims(x, axis=0), axis=1) for x in res_new])
-
-                    if(key_poses.shape[0] > cur_max_len):
-                        new_pad = key_poses.shape[0] - cur_max_len
-                        X_act = np.pad(X_act, ((0,0), (0,new_pad), (0,0)))
-                        cur_max_len = key_poses.shape[0]
-
-                    key_poses_tmp = np.zeros((1,cur_max_len,coords), dtype=X_act.dtype)
-                    key_poses_tmp[0, :key_poses.shape[0], :] = key_poses
-
-                    if(sample_counter_seq == X_act.shape[0]):
-                        X_act = np.concatenate([X_act, np.zeros((5000,cur_max_len,coords))])
-                        y_act = np.concatenate([y_act, np.zeros((5000))])
-                        seq_lens_sampl = np.concatenate([seq_lens_sampl, np.zeros((5000))])
-                        seq_lens_act = np.concatenate([seq_lens_act, np.zeros((5000))])
-
-                    X_act[sample_counter_seq] = key_poses_tmp
-                    y_act[sample_counter_seq] = seg_class
-                    seq_lens_sampl[sample_counter_seq] = seq_len_tmp
-                    seq_lens_act[sample_counter_seq] = key_poses.shape[0]
-
-                    sample_counter_seq += 1
-
-            last_label_seg_change = X_tmp[0,150]
-            last_label_pose_change_f = X_tmp[0,151]
-            last_label_pose_change_s = X_tmp[0,152]
-
-            for c in range(0, X_tmp.shape[0] - 1):
-                start = max(0, c - window_size)
-                cur_window = X_tmp[start:(c + 1), 0:75]
-                cur_window_vec = np.zeros((1, 75))
-
-                seg_change_label = 0 #no change
-                pose_change_label = 0 #no change
-                if(c > 0):
-                    if(X_tmp[c,150] != last_label_seg_change):          
-                        if(last_label_seg_change == 0):
-                            seg_change_label = 1 #from no activity to activity
-                        else:
-                            seg_change_label = 2 #from activity to no activity
-                    elif(X_tmp[c,151] != last_label_pose_change_f):
-                        pose_change_label = 1 #change of pose
-                    elif(last_label_pose_change_f != -1):
-                        pose_change_label = 2 #in activity but no change of pose
-
-                last_label_seg_change = X_tmp[c,150]
-                last_label_pose_change_f = X_tmp[c,151]
-
-                if(subsample and seg_change_label == 0 and pose_change_label == 0 and c % 3 == 0):
-                    continue
-
-                for j in range(cur_window.shape[0] - 1):
-                    cur_window_vec += (cur_window[j + 1] - cur_window[j])
-                
-                if(sample_counter_window == X_window_seg_vec.shape[0]):
-                    X_window_seg_vec = np.concatenate([X_window_seg_vec, np.zeros((5000, 75))])
-                    y_window_seg = np.concatenate([y_window_seg, np.zeros((5000), dtype=np.int32)])
-                    y_window_pose = np.concatenate([y_window_pose, np.zeros((5000), dtype=np.int32)])
-                    y_sample_num = np.concatenate([y_sample_num, np.zeros((5000), dtype=np.int32)])
-
-                X_window_seg_vec[sample_counter_window] = cur_window_vec
-                y_window_seg[sample_counter_window] = seg_change_label
-                y_window_pose[sample_counter_window] = pose_change_label
-                y_sample_num[sample_counter_window] = sample_counter
-
-                sample_counter_window +=1
-
-            print("Sample " + str(sample_counter) + "\r")
-            sample_counter +=1
-    
-    X_act = X_act[:sample_counter_seq]
-    y_act = y_act[:sample_counter_seq]
-    seq_lens_sampl = seq_lens_sampl[:sample_counter_seq]
-    seq_lens_act = seq_lens_act[:sample_counter_seq]
-
-    X_window_seg_vec = X_window_seg_vec[:sample_counter_window]
-    y_window_seg = y_window_seg[:sample_counter_window]
-    y_window_pose = y_window_pose[:sample_counter_window]
-    y_sample_num = y_sample_num[:sample_counter_window]
-
-    f = open(file_name,"wb")
-    pickle.dump([X_act, y_act, seq_lens_sampl, seq_lens_act, X_window_seg_vec, y_window_seg, y_window_pose, y_sample_num], f, protocol=4)
-    f.close()
-
-    return X_act, y_act, seq_lens_sampl, seq_lens_act, X_window_seg_vec, y_window_seg, y_window_pose, y_sample_num
-
-
-def prepare_dataset_gen(dataset_type, train_generator, file_name, kalman_params, merge = False, plot_multiview = False, coords=75):
+def prepare_dataset_gen(dataset_type, train_generator, file_name, return_gen, params_d, coords=75):
     cur_max_len_act = 1000
 
     X_act = np.zeros((1,cur_max_len_act,coords))
     y_act = np.zeros((1), dtype=np.int32)
     seq_lens_act = np.zeros((1), dtype=np.int32)
 
+    kalman_params, fuse_type, yield_non_full = params_d['kalman_f'],  params_d['mv_fuse_type'],  params_d['yield_non_full']
+
+    return_type = params_d['draw_type']
+    if(return_type == 'none'):
+        return_type = params_d['val_type']
+
     local_gen_func = local_gen_pku
 
     if(dataset_type == Dataset.NTU_RGB):
-        local_gen_func = local_gen_ntu
+        local_gen_func = local_gen_ntu#_simple
+        cur_max_len_act = 300
+
+
+    local_gen_func_iter = local_gen_func(train_generator, cur_max_len_act, coords, fuse_type, kalman_params, return_type, yield_non_full)
+    if(return_gen):
+        return local_gen_func_iter, file_name
 
     f = tables.open_file(file_name, mode='w')
 
-    array_X_act = f.create_earray(f.root, 'X_act', tables.Float64Atom(), (0, 1000, 75))
+    array_X_act = f.create_earray(f.root, 'X_act', tables.Float64Atom(), (0, cur_max_len_act, 75))
     array_y_act = f.create_earray(f.root, 'y_act', tables.Int32Atom(), (0, 1))
     array_seq_lens_act = f.create_earray(f.root, 'seq_lens_act', tables.Int32Atom(), (0, 1))
 
-    for node in local_gen_func(train_generator, cur_max_len_act, coords, merge, kalman_params, plot_multiview):
-        X_act_t, y_act_t, seq_lens_act_t = node
+    for node in local_gen_func_iter:
+    #for node in local_gen_func(train_generator):
+        X_act_t, y_act_t, seq_lens_act_t= node
 
         array_X_act.append(X_act_t)
         array_y_act.append(y_act_t)
@@ -388,14 +196,19 @@ def prepare_dataset_gen(dataset_type, train_generator, file_name, kalman_params,
     f = tables.open_file(file_name, mode='r')
     X_act, y_act, seq_lens_act = f.root
     
-    return [X_act, y_act, seq_lens_act], f, Path(file_name).name
+    return [X_act, y_act, seq_lens_act], f, file_name
 
 
 def load_params_default(params_d):
     params_default={'kalman_f' : {'dt' : 1/30, 'P_mul': 3, 'R_mul':  0.05, 'Q_mul': 100},
-                    'norm_type':NormType.NORM_SKEL_REF, 
+                    'norm_type':NormType.NORM_SKEL_REF,
                     'rep_type':RepType.SEQUENCE,
-                    'rot_type':RotType.NO_ROT}
+                    'rot_type':RotType.NO_ROT,
+                    'classes': 'single',
+                    'draw_type':'none',
+                    "val_type":'none',
+                    "yield_non_full" : False
+                    }
 
     for key in params_default.keys():
         if(key in params_d):
@@ -405,128 +218,188 @@ def load_params_default(params_d):
 
     return params_d
 
-def training_detection(dataset, bm_train_type="cv", mv_merge_type="none", params_d={}):
+
+
+
+
+def process_common(dataset, bm_train_type="cv", mv_fuse_data="none", 
+                            method='hmm', method_type='classification', params_d={}):
 
     params_d = load_params_default(params_d)
 
-
-def training_classification(dataset, bm_train_type="cv", mv_merge_type="none", method='hmm', params_d={}):
-
-    params_d = load_params_default(params_d)
-
-    joint_c = 25
     dataset_func = None
+
     if(dataset == 'ntu'):
         dataset_func = get_dataset_ntu
-    elif(dataset=='utd'):
-        joint_c = 20
-        dataset_func = get_dataset_utd
     elif(dataset=='pku'):
         dataset_func = get_dataset_pku
     else:
-        raise "Non-existant dataset!"
+        raise "Non-existent dataset!"
 
-    params_train_merged, params_test_merged = False, False
-    merged_str = "Non_Merged"
-    if(mv_merge_type == "train_only"):
-        params_train_merged = True
-        merged_str = "Train_Merged"
-    elif(mv_merge_type == "both"):
-        params_train_merged = True
-        params_test_merged = True
-        merged_str = "Fully_Merged"
+    params_train_fused_type, params_test_fused_type = FuseType.NONE, FuseType.NONE
+    fused_str = "Non_fused"
 
-    params_d['mv_merged'] = params_train_merged
+    if(mv_fuse_data == "train_only"):
+        params_train_fused_type = params_d["mv_fuse_type"]
+        fused_str = "TrainOnly_fused_" + str(params_d["mv_fuse_type"].name)
+    elif(mv_fuse_data == "both"):
+        params_train_fused_type = params_d["mv_fuse_type"]
+        params_test_fused_type = params_d["mv_fuse_type"]
+        fused_str = "Both_fused_" + str(params_d["mv_fuse_type"].name)
+    elif(mv_fuse_data == "none"):
+        params_d["mv_fuse_type"] = FuseType.NONE
+    else:
+        raise "Non-existent fusion mode!"
 
-    dataset_tr, f_tr, filename_tr = dataset_func(dataset + "_" + bm_train_type + "_train", 
-                                                data_preprocess = False,
-                                                params_d = params_d)
+    return_gen = False
+    data_preprocess = False
+    if(method_type == "visualization" or method_type == "validation"):
+        if params_d["draw_type"] == "none" and method_type == "visualization":
+            raise "Draw type needs to be set for method type visualization!"
+        if params_d["val_type"] == "none" and method_type == "validation":
+            raise "Validation type needs to be set for method type validation!"
+        return_gen = True
+        data_preprocess = True
+    
+    params_d['mv_fuse_type'] = params_train_fused_type
 
-    params_d['mv_merged'] = params_test_merged
+    train_generic_dataset = dataset_func(dataset + "_" + bm_train_type + "_train", 
+                                        data_preprocess, return_gen,
+                                        params_d = params_d)
 
-    dataset_ts, f_ts, filename_ts = dataset_func(dataset + "_" + bm_train_type + "_test",
-                                                data_preprocess = False,
-                                                params_d = params_d)
+    params_d['mv_fuse_type'] = params_test_fused_type
 
-    if(method == 'hmm'):
-        hmm_n_comp = []
-        if("hmm_n_comp" in params_d):
-            hmm_n_comp = params_d['hmm_n_comp']
+    if(bm_train_type == 'all' or method_type=='validation'):
+        test_generic_dataset = None, None, None
+    else:
+        test_generic_dataset = dataset_func(dataset + "_" + bm_train_type + "_test",
+                                            data_preprocess, return_gen,
+                                            params_d = params_d)
+    
+    f_tr, f_ts = None, None
+    if(method_type == "classification"):
+        dataset_tr, f_tr, filename_tr = train_generic_dataset
+        dataset_ts, f_ts, filename_ts = test_generic_dataset
 
-        train_hmm(dataset_tr, dataset_ts, joint_c, merged_str, hmm_n_comp)
-    elif(method == 'draw'):
-        if("dataset_draw" not in params_d or params_d["dataset_draw"] == "train"):
-            dataset_draw = dataset_tr
-            filename_draw = filename_tr
+        if(method == 'hmm'):
+            hmm_n_comp = []
+            if("hmm_n_comp" in params_d):
+                hmm_n_comp = params_d['hmm_n_comp']
+
+            train_hmm(dataset_tr, dataset_ts, fused_str, hmm_n_comp)
+        elif(method == 'hcn'):
+            #epochs 10/30/50
+            #TODO: params
+            num_classes = np.max(dataset_tr[2]) + 1
+
+            f_tr.close()
+            f_ts.close()
+
+            #args = {'epochs':40, 'batch_size':64, 'base_lr':1e-1, 'steps':[10, 40], 'save_freq':10}
+            args = {'epochs':100, 'batch_size':64, 'base_lr':0.001, 'steps':[30,90,150], 'save_freq':50}
+            train_hcn(filename_tr, filename_ts, num_classes, fused_str, args)
+        elif(method == 'stgcn'):
+            num_classes = np.max(dataset_tr[2]) + 1
+
+            f_tr.close()
+            f_ts.close()
+
+            args = {'epochs':30, 'batch_size':64, 'base_lr':0.1, 'save_freq':4}
+            train_gcn(filename_tr, filename_ts, num_classes, fused_str, args)
         else:
-            dataset_draw = dataset_ts
-            filename_draw = filename_ts
+            raise "Non-existent method!"
+    elif(method_type == "regression"):
+        dataset_tr, f_tr, filename_tr = train_generic_dataset
+        dataset_ts, f_ts, filename_ts = test_generic_dataset
 
-        if("draw_type" not in params_d):
-            draw_type = 'gif'
+        pass
+    elif(method_type == "visualization"):
+
+        if(params_d['draw_type'] == 'h_states'):
+            draw_dataset_hidden_states()
         else:
-            draw_type = params_d["draw_type"]
+            train_dataset_local_gen, filename_tr = train_generic_dataset
+            test_dataset_local_gen, filename_ts = test_generic_dataset
 
-        draw_dataset_generic(dataset_draw, Path(filename_draw).stem, draw_type)
+            #TODO:Make it for both datasets??
+            if("dataset_draw" not in params_d or params_d["dataset_draw"] == "train"):
+                dataset_draw_gen = train_dataset_local_gen
+                filename_draw = Path(filename_tr).stem
+            else:
+                dataset_draw_gen = test_dataset_local_gen
+                filename_draw = Path(filename_ts).stem
 
+            draw_dataset_generator(dataset_draw_gen, filename_draw, params_d['draw_type'], 300, 75) #TODO: change 300
+    elif(method_type == "validation_param"):
+        train_dataset_local_gen, _ = train_generic_dataset
 
-    f_tr.close()
-    f_ts.close()
+        find_params_generator(train_dataset_local_gen, params_d['val_type'])
+    elif(method_type == "validation"):
+        train_dataset_local_gen, _ = train_generic_dataset
 
-tables.file._open_files.close_all()
+        skel_transf_regressor(train_dataset_local_gen)
 
-
-#TODO: console input and validate parameters
-
-#kalman after merging data? YES, makes sense
-
-#compile_kalman()
-
-training_classification('pku', 'cs', "both", method='hmm',
-                        params_d={
-                            "subtype":"full",
-                            "plot_mv":False,
-                            "classes": "single",
-                            #"kalman_f":None,
-                            "dataset_draw" : "train",
-                            "hmm_n_comp" : [20]})
-
-# training_classification('pku', 'cs', "none", method='hmm',
-#                         params_d={
-#                             "subtype":"full",
-#                             "plot_mv":False,
-#                             "classes": "single",
-#                             "hmm_n_comp" : [25]})
+    if(f_tr is not None):
+        f_tr.close()
+    if(f_ts is not None):
+        f_ts.close()
 
 
+if __name__ == '__main__':
+    tables.file._open_files.close_all()
+
+
+    #TODO: console input and validate parameters
+
+    # process_common('ntu', 'cs', "none", method='odcnn',
+    #                         params_d={
+    #                             'norm_type':NormType.NORM_NECK_TORSO,
+    #                             "classes": "single",
+    #                             "yield_non_full":True})
+
+
+    # process_common('ntu', 'cs', "both", method_type='validation',
+    #                         params_d={
+    #                             'norm_type':NormType.NORM_BONE_UNIT_VEC,
+    #                             "mv_fuse_type":FuseType.OPT_POSE,
+    #                             #"val_type":"mv_seq_eq",
+    #                             "val_type":"rot_pose_regr",
+    #                             "classes": "single"})
+
+    process_common('ntu', 'cs', "both", method_type='visualization',
+                            params_d={
+                                'norm_type':NormType.NORM_BONE_UNIT_VEC,
+                                "mv_fuse_type":FuseType.OPT_POSE,
+                                "draw_type":"gif_single",
+                                "classes": "single"})
+
+    # process_common('pku', 'cs', "both", method='hmm',
+    #                         params_d={
+    #                             "subtype":"full",
+    #                             "plot_mv":False,
+    #                             "classes": "single",
+    #                             'norm_type':NormType.NORM_BONE_UNIT_VEC,
+    #                             "mv_fuse_type":FuseType.OPT_POSE,
+    #                             "rot_type":RotType.NO_ROT,
+    #                             "hmm_n_comp" : [10]})
+
+    #TOVA POSLEDNO
+    # process_common('ntu', 'cs', "both", method='hcn',
+    #                         params_d={
+    #                             'norm_type':NormType.NORM_BONE_UNIT_VEC,
+    #                             "subtype": "full",
+    #                             #"kalman_f":None,
+    #                             "mv_fuse_type": FuseType.OPT_POSE,
+    #                             "plot_mv": False,
+    #                             "classes": "single"})
 
 
 
-
-#training_detection('pku_2', bm_train_type="cv", mv_merge_type="none", method='hmm', params_d={})
-
-
-#LAST
-# training_generic('utd', 'utd', method='dtw_pose', 
-#                         params_d={
-#                            "rep_type":RepType.SEQUENCE, 
-#                            "rot_type":RotType.NO_ROT})
-
-#training_generic('ntu', 'cs', "none", method='hmm',
-#                    params_d={"classes":"single", 
-#                            "rep_type":RepType.KEY_POSES, 
-#                            "rot_type":RotType.NO_ROT})
-
-
-#TODO: set default params_d
-#training_generic('pku','cs', method='seg',
-#                    params_d={"subtype":"full",
-#                            "subsample" : False,
-#                            "classes":"single", 
-#                            "rep_type":RepType.SEQUENCE, 
-#                            "rot_type":RotType.NO_ROT})
-
-
-
-
+#TODO VISUALIZATION
+    # process_common('ntu', 'cs', "both", method_type='visualization',
+    #                         params_d={
+    #                             'norm_type':NormType.NORM_BONE_UNIT_VEC,
+    #                             "mv_fuse_type":FuseType.OPT_POSE,
+    #                             "draw_type":"mv_seq_uneq_dtw", 
+    #                             "classes": "single"})
 

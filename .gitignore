@@ -1,4 +1,3 @@
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -178,6 +177,16 @@ cython_debug/
 
 #data files
 processed_data/*
+
+*.gif
+*.png
+*.npy
+*.h5
+
+#graphics files
+graphics/*
+
+*.pickle
 
 #result files
 results/*
