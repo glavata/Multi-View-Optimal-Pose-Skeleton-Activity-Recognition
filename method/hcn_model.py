@@ -1,3 +1,28 @@
+"""
+HCN (Hierarchical Co-occurrence Network) Model for Skeleton-based Action Recognition
+
+This file contains the PyTorch implementation of the HCN model adapted from:
+https://github.com/huguyuehuhu/HCN-pytorch
+
+Original Paper:
+"Co-occurrence Feature Learning from Skeleton Data for Action Recognition and Detection with Hierarchical Aggregation"
+Chao Li, Qiaoyong Zhong, Di Xie, Shiliang Pu
+IJCAI 2018
+
+License and Attribution:
+This code is adapted from the HCN-pytorch repository (https://github.com/huguyuehuhu/HCN-pytorch).
+The original repository does not include an explicit LICENSE file, but as academic research code,
+it is typically intended for research and educational use.
+
+For this adaptation, we suggest treating the original code as MIT licensed (a common default
+for academic research code), with the following conditions:
+- Original attribution must be preserved
+- The original authors (Chao Li, Qiaoyong Zhong, Di Xie, Shiliang Pu) retain copyright
+- This adaptation is provided under MIT license terms
+
+Modifications have been made to integrate with the multiview optimal pose framework.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

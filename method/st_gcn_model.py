@@ -1,3 +1,46 @@
+"""
+ST-GCN (Spatial Temporal Graph Convolutional Networks) Model for Skeleton-based Action Recognition
+
+This file contains the PyTorch implementation of the ST-GCN model adapted from:
+https://github.com/yysijie/st-gcn
+
+Original Paper:
+"Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition"
+Sijie Yan, Yuanjun Xiong and Dahua Lin
+AAAI 2018
+
+License:
+This code is adapted from the ST-GCN repository which is released under the BSD-2-Clause license.
+The original repository can be found at: https://github.com/yysijie/st-gcn
+
+BSD-2-Clause License Terms:
+Copyright (c) 2018, Sijie Yan, Yuanjun Xiong and Dahua Lin
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Modifications have been made to integrate with the multiview optimal pose framework.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
